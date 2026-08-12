@@ -1,0 +1,19 @@
+# ── core ─────────────────────────────────────────────────────────────────
+fastapi>=0.115,<1.0
+uvicorn[standard]>=0.30
+pydantic>=2.7
+pydantic-settings>=2.3
+httpx>=0.27
+
+# ── data / strategy ──────────────────────────────────────────────────────
+pandas>=2.2
+numpy>=1.26
+yfinance>=0.2.54          # daily bars + the free (delayed) intraday poller
+
+# ── live NSE/BSE ticks ───────────────────────────────────────────────────
+# Only needed when FEED=angelone. Harmless to install either way; the feed
+# module is imported lazily so a missing SDK never breaks the Yahoo path.
+smartapi-python>=1.5.5
+pyotp>=2.9
+websocket-client>=1.7
+logzero>=1.7

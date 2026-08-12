@@ -1,0 +1,11 @@
+.env
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.DS_Store
+.pytest_cache/
+
+# runtime state — regenerated on boot (the seed list lives in app/seed/)
+data/*
+!data/.gitkeep

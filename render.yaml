@@ -1,0 +1,41 @@
+# Render blueprint. Push this repo to GitHub, then:
+#   Render dashboard -> New -> Blueprint -> pick the repo.
+#
+# Note the plan: `starter` is the cheapest always-on tier. On `free`, Render
+# spins the service down after ~15 minutes with no inbound traffic, which
+# stops the scanner. See the README for the free-tier workaround.
+services:
+  - type: web
+    name: night-ledger
+    runtime: python
+    plan: starter
+    region: singapore          # closest Render region to NSE
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT --workers 1
+    healthCheckPath: /healthz
+    autoDeploy: true
+    disk:
+      name: ledger-data        # keeps the watchlist across redeploys
+      mountPath: /opt/render/project/src/data
+      sizeGB: 1
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.12.6"
+      - key: TZ
+        value: Asia/Kolkata
+      - key: FEED
+        value: yahoo           # switch to `angelone` once credentials are set
+      - key: ACCESS_TOKEN      # set a long random string to lock the public URL
+        generateValue: true
+      - key: ANGEL_API_KEY
+        sync: false
+      - key: ANGEL_CLIENT_CODE
+        sync: false
+      - key: ANGEL_PASSWORD
+        sync: false
+      - key: ANGEL_TOTP_SECRET
+        sync: false
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: TELEGRAM_CHAT_ID
+        sync: false
