@@ -1,23 +1,39 @@
 # Render blueprint. Push this repo to GitHub, then:
-#   Render dashboard -> New -> Blueprint -> pick the repo.
+#   Render dashboard -> New -> Blueprint -> pick the repo -> Apply.
 #
-# Note the plan: `starter` is the cheapest always-on tier. On `free`, Render
-# spins the service down after ~15 minutes with no inbound traffic, which
-# stops the scanner. See the README for the free-tier workaround.
+# Defaults to the FREE plan so this deploys with no payment method attached.
+# Read the two trade-offs below before trusting it with real alerts.
+#
+# ── Free tier: what you give up ─────────────────────────────────────────────
+# 1. Render spins a free web service down after ~15 minutes with no inbound
+#    traffic, and a sleeping scanner is not a scanner. Point a free uptime
+#    monitor (UptimeRobot, Better Stack) at /healthz every 10 minutes to keep
+#    it awake. Mind the monthly free-hours budget.
+# 2. No persistent disk on free, so the watchlist and alert tape reset when
+#    the instance restarts. Re-adding a few symbols takes seconds, but it is
+#    not durable.
+#
+# ── Going always-on (~$7/mo) ────────────────────────────────────────────────
+# Change `plan: free` to `plan: starter`, uncomment the `disk:` block, and
+# redeploy. No spin-down, and the watchlist survives restarts and redeploys.
 services:
   - type: web
     name: night-ledger
     runtime: python
-    plan: starter
+    plan: free                 # -> starter for always-on + persistence
     region: singapore          # closest Render region to NSE
     buildCommand: pip install -r requirements.txt
     startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT --workers 1
     healthCheckPath: /healthz
     autoDeploy: true
-    disk:
-      name: ledger-data        # keeps the watchlist across redeploys
-      mountPath: /opt/render/project/src/data
-      sizeGB: 1
+
+    # Uncomment together with `plan: starter` to keep the watchlist across
+    # restarts. A disk cannot be attached to a free instance.
+    # disk:
+    #   name: ledger-data
+    #   mountPath: /opt/render/project/src/data
+    #   sizeGB: 1
+
     envVars:
       - key: PYTHON_VERSION
         value: "3.12.6"
@@ -25,7 +41,11 @@ services:
         value: Asia/Kolkata
       - key: FEED
         value: yahoo           # switch to `angelone` once credentials are set
-      - key: ACCESS_TOKEN      # set a long random string to lock the public URL
+      # Locks the public URL. Render generates the value; read it in the
+      # dashboard under Environment, then open the site once as
+      #   https://<your-app>.onrender.com/?token=THAT_VALUE
+      # and the browser keeps a cookie from then on.
+      - key: ACCESS_TOKEN
         generateValue: true
       - key: ANGEL_API_KEY
         sync: false
