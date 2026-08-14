@@ -211,6 +211,53 @@ class TestScannerPipeline(unittest.IsolatedAsyncioTestCase):
         fired = await self.scanner.scan_setups()
         self.assertEqual({a.symbol for a in fired}, {GOOD})
 
+    # ------------------------------------------------------- data health
+    async def test_healthy_scan_reports_full_coverage(self):
+        await self.scanner.scan_setups()
+        h = self.scanner.data_health
+        self.assertEqual((h.requested, h.fetched), (2, 2))
+        self.assertFalse(h.blocked)
+        self.assertEqual(h.valid_setups, 1)
+
+    async def test_provider_returning_nothing_is_flagged_as_blocked(self):
+        """The failure mode that matters: the scanner runs, the feed refuses,
+        and without this the UI shows a normal empty dashboard."""
+        self.scanner.history.frames.clear()
+        await self.scanner.scan_setups()
+        h = self.scanner.data_health
+        self.assertTrue(h.blocked)
+        self.assertEqual(h.fetched, 0)
+        self.assertTrue(any("no price data" in e for e in self.scanner.errors))
+
+    async def test_partial_coverage_lists_the_missing_symbols(self):
+        del self.scanner.history.frames[BAD]
+        await self.scanner.scan_setups()
+        h = self.scanner.data_health
+        self.assertEqual((h.requested, h.fetched), (2, 1))
+        self.assertFalse(h.blocked)
+        self.assertEqual(h.missing, [BAD])
+
+    async def test_diagnose_reports_a_healthy_feed(self):
+        d = await self.scanner.diagnose(GOOD)
+        self.assertTrue(d.ok)
+        self.assertGreater(d.bars, 200)
+        self.assertIsNotNone(d.last_close)
+        self.assertIn("healthy", d.summary)
+
+    async def test_diagnose_explains_an_empty_response(self):
+        d = await self.scanner.diagnose("NOTLISTED.NS")
+        self.assertFalse(d.ok)
+        self.assertEqual(d.bars, 0)
+        self.assertIn("throttl", d.summary)
+
+    async def test_diagnose_surfaces_a_raised_error(self):
+        async def boom(*a, **kw):
+            raise RuntimeError("connection reset by peer")
+        self.scanner.history.daily = boom
+        d = await self.scanner.diagnose(GOOD)
+        self.assertFalse(d.ok)
+        self.assertIn("connection reset", d.error)
+
     async def test_watchlist_survives_a_restart(self):
         tmp = self._tmp.name
         reopened = WatchlistStore(tmp)
