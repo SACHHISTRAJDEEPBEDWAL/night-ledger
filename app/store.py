@@ -28,12 +28,27 @@ MAX_ALERTS = 400
 
 
 class WatchlistStore:
-    def __init__(self, data_dir: str = "data") -> None:
+    def __init__(self, data_dir: str = "data", seed: str = "") -> None:
         self.path = Path(data_dir) / "watchlist.json"
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._items: dict[str, WatchItem] = {}
         self._lock = asyncio.Lock()
         self._load()
+        if not self.path.exists() and seed:
+            self._seed(seed)
+
+    def _seed(self, seed: str) -> None:
+        """First boot only. An empty dashboard looks broken, so ship a real
+        watchlist and let the user prune it."""
+        now = datetime.now(IST)
+        for symbol in [s.strip().upper() for s in seed.split(",") if s.strip()]:
+            self._items[symbol] = WatchItem(
+                symbol=symbol,
+                exchange="BSE" if symbol.endswith(".BO") else "NSE",
+                added_at=now,
+            )
+        self._persist()
+        log.info("seeded watchlist with %d symbols", len(self._items))
 
     def _load(self) -> None:
         if not self.path.exists():

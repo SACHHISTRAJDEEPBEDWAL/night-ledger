@@ -105,6 +105,36 @@ class Quote(BaseModel):
     stale: bool = False
 
 
+class DataHealth(BaseModel):
+    """Did the last screening pass actually get any price data?
+
+    Without this the dashboard cannot tell "no setups found" apart from "the
+    data provider refused us" — and those need very different reactions.
+    Yahoo throttles datacenter IPs, so on a cloud host the second case is
+    common and must not look like the first.
+    """
+
+    requested: int = 0
+    fetched: int = 0
+    valid_setups: int = 0
+    missing: list[str] = Field(default_factory=list)
+    at: datetime | None = None
+    blocked: bool = False
+
+
+class Diagnostic(BaseModel):
+    """Result of manually probing the price feed from the dashboard."""
+
+    ok: bool
+    summary: str
+    probe: str = ""
+    bars: int = 0
+    latency_ms: int = 0
+    last_close: float | None = None
+    last_bar_date: str = ""
+    error: str = ""
+
+
 class ScannerStatus(BaseModel):
     running: bool
     feed: str
@@ -116,3 +146,4 @@ class ScannerStatus(BaseModel):
     last_vcp_scan: datetime | None = None
     alerts_today: int = 0
     errors: list[str] = Field(default_factory=list)
+    data_health: DataHealth | None = None

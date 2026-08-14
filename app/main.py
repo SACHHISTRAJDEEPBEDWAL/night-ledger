@@ -15,6 +15,7 @@ from pathlib import Path
 from fastapi import Body, FastAPI, HTTPException, Query, Request, Response
 from fastapi.responses import (
     FileResponse,
+    HTMLResponse,
     JSONResponse,
     RedirectResponse,
     StreamingResponse,
@@ -39,7 +40,7 @@ log = logging.getLogger("nightledger")
 WEB_DIR = Path(__file__).resolve().parent / "web"
 HEARTBEAT_SECONDS = 20
 
-watchlist = WatchlistStore(settings.data_dir)
+watchlist = WatchlistStore(settings.data_dir, seed=settings.default_watchlist)
 alerts = AlertStore(settings.data_dir)
 setups = SetupStore()
 universe = Universe(settings.data_dir)
@@ -66,6 +67,59 @@ app = FastAPI(title=settings.app_name, version="1.0.0", lifespan=lifespan)
 # --------------------------------------------------------------------- auth
 PUBLIC_PATHS = {"/healthz", "/manifest.webmanifest", "/favicon.ico"}
 
+# A bare `{"detail":"unauthorised"}` in the browser reads as "the app is
+# broken", not "you need a token" — so a locked instance explains itself and
+# offers the way in. API calls still get plain JSON.
+UNLOCK_PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Night Ledger — locked</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+:root{--ink:#0A0B0D;--paper:#E8E1D3;--saffron:#F2A03D;--muted:#867F73;
+  --rule:rgba(232,225,211,.13);--mono:"IBM Plex Mono",ui-monospace,monospace;
+  --serif:"Instrument Serif",Georgia,serif}
+*{box-sizing:border-box;margin:0;padding:0}
+body{min-height:100dvh;display:grid;place-items:center;padding:24px;
+  background:var(--ink);color:var(--paper);font-family:var(--mono);font-size:13px;
+  background-image:radial-gradient(900px 480px at 80% -10%,rgba(242,160,61,.12),transparent 60%),
+    repeating-linear-gradient(to bottom,transparent 0 29px,rgba(232,225,211,.05) 29px 30px)}
+.card{width:100%;max-width:430px;animation:rise .7s cubic-bezier(.16,1,.3,1) both}
+@keyframes rise{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
+h1{font-family:var(--serif);font-size:34px;font-weight:400;line-height:1.05}
+h1 em{font-style:italic;color:var(--saffron)}
+.sub{font-size:10px;letter-spacing:.18em;text-transform:uppercase;color:var(--muted);
+  margin-top:6px}
+p{color:var(--muted);line-height:1.7;margin-top:20px;font-size:12px}
+form{display:flex;gap:8px;margin-top:20px}
+input{flex:1;min-width:0;padding:11px 12px;background:#0E1013;border:1px solid var(--rule);
+  color:var(--paper);font-family:var(--mono);font-size:12.5px;outline:none;transition:.2s}
+input:focus{border-color:rgba(242,160,61,.5);box-shadow:0 0 0 3px rgba(242,160,61,.14)}
+button{padding:11px 16px;background:rgba(242,160,61,.15);border:1px solid rgba(242,160,61,.4);
+  color:var(--saffron);font-family:var(--mono);font-size:11px;letter-spacing:.12em;
+  text-transform:uppercase;cursor:pointer;transition:.2s;white-space:nowrap}
+button:hover{background:rgba(242,160,61,.28)}
+.hint{margin-top:22px;padding-top:16px;border-top:1px solid var(--rule);font-size:11px;
+  color:var(--muted);line-height:1.8}
+.hint b{color:var(--paper);font-weight:500}
+code{color:var(--saffron)}
+</style></head><body><div class="card">
+<h1>Night <em>Ledger</em></h1>
+<div class="sub">Access required</div>
+<p>This scanner is running, but it is protected by an access token. Nothing is
+broken — you just need the key.</p>
+<form method="get" action="/">
+  <input name="token" type="password" placeholder="Paste your access token"
+         autocomplete="off" autofocus>
+  <button type="submit">Unlock</button>
+</form>
+<div class="hint"><b>Where to find it:</b> your host's environment settings, under
+<code>ACCESS_TOKEN</code>. On Render that is your service → Environment.<br>
+<b>Don't want a lock?</b> Delete the <code>ACCESS_TOKEN</code> variable and redeploy —
+the dashboard then opens for anyone with the link.</div>
+</div></body></html>"""
+
 
 @app.middleware("http")
 async def gate(request: Request, call_next):
@@ -84,6 +138,9 @@ async def gate(request: Request, call_next):
         or request.cookies.get("nl_token")
     )
     if supplied != settings.access_token:
+        wants_html = "text/html" in request.headers.get("accept", "")
+        if wants_html and not request.url.path.startswith("/api/"):
+            return HTMLResponse(UNLOCK_PAGE, status_code=401)
         return JSONResponse({"detail": "unauthorised"}, status_code=401)
 
     if request.query_params.get("token"):
@@ -110,7 +167,15 @@ async def dashboard() -> FileResponse:
 async def healthz() -> dict:
     """Point an uptime pinger here — it doubles as the keep-alive that stops
     a free-tier web service from idling out."""
-    return {"ok": True, "phase": scanner.market_phase(), "feed": live_feed.name}
+    return {
+        "ok": True,
+        "phase": scanner.market_phase(),
+        "feed": live_feed.name,
+        # Diagnosable from outside without exposing anything: tells you whether
+        # a 401 on / is expected, or a real fault.
+        "auth_required": bool(settings.access_token),
+        "watchlist": len(watchlist.symbols()),
+    }
 
 
 @app.get("/manifest.webmanifest", include_in_schema=False)
@@ -236,7 +301,20 @@ async def api_setup(symbol: str) -> dict:
 @app.post("/api/scan")
 async def api_scan() -> dict:
     fired = await scanner.scan_setups()
-    return {"scanned": len(watchlist.symbols()), "new_alerts": len(fired)}
+    health = scanner.data_health
+    return {
+        "scanned": len(watchlist.symbols()),
+        "new_alerts": len(fired),
+        "fetched": health.fetched if health else 0,
+        "valid_setups": health.valid_setups if health else 0,
+        "blocked": bool(health and health.blocked),
+    }
+
+
+@app.get("/api/diagnostics")
+async def api_diagnostics(symbol: str = Query(default="RELIANCE.NS")) -> dict:
+    """Probe the price feed on demand. Turns 'it's empty' into a real answer."""
+    return (await scanner.diagnose(symbol.upper())).model_dump(mode="json")
 
 
 @app.get("/api/stream")

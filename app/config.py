@@ -23,6 +23,14 @@ class Settings(BaseSettings):
     access_token: str = ""
     data_dir: str = "data"
 
+    # Seeded on the very first boot only, so a fresh deploy shows a working
+    # dashboard instead of three empty panels. Delete any of them in the UI and
+    # they stay deleted — the seed never runs again once the file exists.
+    default_watchlist: str = (
+        "RELIANCE.NS,HDFCBANK.NS,ICICIBANK.NS,INFY.NS,TCS.NS,TATAMOTORS.NS,"
+        "DIXON.NS,TRENT.NS,BEL.NS,HAL.NS,POLYCAB.NS,PERSISTENT.NS"
+    )
+
     # ------------------------------------------------------------------ feed
     # "yahoo"    -> zero credentials, daily bars are fine, intraday is delayed
     # "angelone" -> live tick-by-tick over WebSocket (needs broker credentials)

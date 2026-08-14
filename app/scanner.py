@@ -15,13 +15,14 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 import uuid
 from datetime import datetime, time as dtime, timedelta
 
 from .config import IST, Settings
 from .events import EventBus
 from .feeds.base import HistoryProvider, LiveFeed
-from .models import Alert, AlertKind, ScannerStatus
+from .models import Alert, AlertKind, DataHealth, Diagnostic, ScannerStatus
 from .notify import Notifier
 from .store import AlertStore, SetupStore, WatchlistStore
 from .strategy import MomentumTracker, analyse, params_from_settings
@@ -74,6 +75,7 @@ class Scanner:
         self._subscribed: set[str] = set()
         self.quotes: dict[str, dict] = {}
         self.errors: list[str] = []
+        self.data_health: DataHealth | None = None
         self.last_momentum_scan: datetime | None = None
         self.last_vcp_scan: datetime | None = None
         self._open = _parse_hhmm(settings.market_open)
@@ -152,6 +154,15 @@ class Scanner:
         frames = await self.history.daily(targets)
         benchmark = await self.history.benchmark(self.s.rs_benchmark)
 
+        missing = [s for s in targets if s not in frames]
+        if missing and not frames:
+            # Every single fetch failed. That is a provider problem, not a
+            # market observation, and the dashboard has to say so.
+            self._record_error(
+                f"no price data for any of {len(targets)} symbols — "
+                "the data provider may be throttling this host"
+            )
+
         fired: list[Alert] = []
         for symbol in targets:
             frame = frames.get(symbol)
@@ -198,6 +209,14 @@ class Scanner:
 
         self.setups.keep_only(set(self.watchlist.symbols()))
         self.last_vcp_scan = datetime.now(IST)
+        self.data_health = DataHealth(
+            requested=len(targets),
+            fetched=len(frames),
+            valid_setups=sum(1 for s in self.setups.all() if s.valid),
+            missing=missing[:12],
+            at=self.last_vcp_scan,
+            blocked=bool(targets) and not frames,
+        )
         await self.bus.publish("setups", [s.model_dump(mode="json") for s in self.setups.all()])
         return fired
 
@@ -358,6 +377,49 @@ class Scanner:
             last_vcp_scan=self.last_vcp_scan,
             alerts_today=self.alerts.count_today(),
             errors=list(self.errors),
+            data_health=self.data_health,
+        )
+
+    async def diagnose(self, probe: str = "RELIANCE.NS") -> Diagnostic:
+        """Fetch one symbol end to end and report plainly what happened.
+
+        This exists because "the dashboard is empty" has several very
+        different causes — no watchlist, market closed, provider blocked,
+        nothing set up — and guessing between them from the outside is
+        miserable.
+        """
+        started = time.perf_counter()
+        try:
+            frames = await self.history.daily([probe], lookback_days=260)
+        except Exception as exc:  # noqa: BLE001
+            return Diagnostic(
+                ok=False, probe=probe, error=str(exc)[:300],
+                latency_ms=int((time.perf_counter() - started) * 1000),
+                summary="The data provider raised an error. See `error` for detail.",
+            )
+
+        elapsed = int((time.perf_counter() - started) * 1000)
+        frame = frames.get(probe)
+        if frame is None or frame.empty:
+            return Diagnostic(
+                ok=False, probe=probe, latency_ms=elapsed,
+                summary=(
+                    "Reached the provider but got zero bars back. Yahoo throttles "
+                    "cloud/datacenter IPs — this usually means this host is rate "
+                    "limited, not that the symbol is wrong. Retry in a few minutes, "
+                    "or switch FEED to a broker API."
+                ),
+            )
+
+        close = float(frame["close"].iloc[-1])
+        return Diagnostic(
+            ok=True, probe=probe, bars=len(frame), latency_ms=elapsed,
+            last_close=round(close, 2),
+            last_bar_date=str(frame.index[-1].date()),
+            summary=(
+                f"Price feed is healthy — {len(frame)} daily bars for {probe}, "
+                f"last close {close:,.2f}. Screening will work."
+            ),
         )
 
 
