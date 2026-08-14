@@ -122,6 +122,43 @@ header.masthead::after{
 .tape-empty{padding-left:22px;color:var(--muted-2);font-size:11px;letter-spacing:.1em;
   text-transform:uppercase;line-height:30px}
 
+/* ─────────────────────────────────────────────────── manual controls */
+/* Lives above the columns and stays visible at every width. The desktop
+   footer used to be the only place these existed, and it is hidden on
+   mobile — which left a phone with no controls at all. */
+.toolbar{
+  flex:none;display:flex;align-items:center;gap:8px;flex-wrap:wrap;
+  padding:8px 22px;border-bottom:1px solid var(--rule-hard);
+  background:rgba(14,16,19,.5);
+}
+.toolbar .spacer{margin-left:auto}
+.toolbar .note{font-size:10px;letter-spacing:.09em;text-transform:uppercase;color:var(--muted-2)}
+button.act{
+  display:inline-flex;align-items:center;gap:6px;
+  background:var(--ink-2);border:1px solid var(--rule-hard);color:var(--paper);
+  font-family:var(--mono);font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;
+  padding:6px 11px;cursor:pointer;transition:all .18s;
+}
+button.act:hover:not(:disabled){color:var(--saffron);border-color:rgba(242,160,61,.45);
+  background:var(--saffron-soft)}
+button.act:disabled{opacity:.5;cursor:default}
+button.act.primary{border-color:rgba(242,160,61,.4);color:var(--saffron);background:var(--saffron-soft)}
+button.act.primary:hover:not(:disabled){background:rgba(242,160,61,.22)}
+button.act.danger:hover:not(:disabled){color:var(--vermillion);border-color:rgba(240,85,75,.45);
+  background:var(--vermillion-soft)}
+.empty button.act{margin-top:16px}
+
+/* Loud, because a blocked data feed is indistinguishable from an empty
+   market unless we say so outright. */
+.banner{flex:none;display:none;gap:11px;align-items:flex-start;
+  padding:11px 22px;border-bottom:1px solid rgba(240,85,75,.32);
+  background:var(--vermillion-soft);font-size:11.5px;line-height:1.65}
+.banner.on{display:flex}
+.banner .mark{color:var(--vermillion);font-size:14px;line-height:1.35}
+.banner b{color:var(--vermillion);font-weight:500}
+.banner.good{border-bottom-color:rgba(49,196,141,.32);background:var(--jade-soft)}
+.banner.good .mark,.banner.good b{color:var(--jade)}
+
 /* ────────────────────────────────────────────────────────── layout */
 main{
   flex:1;display:grid;min-height:0;
@@ -392,6 +429,17 @@ nav.tabs{display:none}
 
   <div class="tape" id="tape"><div class="tape-empty">no instruments on the tape</div></div>
 
+  <div class="toolbar">
+    <button class="act primary" id="t-scan">⟳ Screen now</button>
+    <button class="act" id="t-seed">+ Starter list</button>
+    <button class="act" id="t-diag">◈ Test feed</button>
+    <button class="act danger" id="t-clear">✕ Clear tape</button>
+    <span class="spacer"></span>
+    <span class="note" id="t-note">ready</span>
+  </div>
+
+  <div class="banner" id="banner"></div>
+
   <main>
     <!-- ── 01 watchlist ────────────────────────────────────────────── -->
     <section class="col active" data-col="watch">
@@ -511,6 +559,7 @@ function renderStatus() {
     ? `last vcp scan ${timeOf(sc.last_vcp_scan)}` : "vcp scan pending";
   $("f-listeners").textContent = `${st.listeners} viewer${st.listeners === 1 ? "" : "s"}`;
   $("alert-count").textContent = `${sc.alerts_today} today`;
+  renderHealth();
 }
 
 /* ─────────────────────────────────────────────────────────── watchlist */
@@ -519,8 +568,9 @@ function renderWatchlist() {
   $("wl-count").textContent = S.watch.length;
   if (!S.watch.length) {
     host.innerHTML = `<div class="empty"><span class="glyph">◇</span>
-      <p>Nothing on the book yet. Search a company above and press <em>+</em> —
-      the scanner picks it up on the next pass, no restart.</p></div>`;
+      <p>Nothing on the book yet. Search a company above and press <em>+</em>,
+      or drop in a dozen liquid NSE names to get going.</p>
+      <button class="act primary" data-action="seed">+ Load starter list</button></div>`;
     return;
   }
   host.innerHTML = S.watch.map((w, i) => {
@@ -639,9 +689,14 @@ function alertRow(a, fresh) {
 function renderAlerts() {
   const host = $("alerts");
   if (!S.alerts.length) {
+    const closed = S.status && S.status.scanner.market_phase === "closed";
     host.innerHTML = `<div class="empty"><span class="glyph">〰</span>
-      <p>The tape is quiet. Alerts print here the moment a base completes,
-      a pivot breaks, or a name moves <em>+2% inside 15 minutes</em>.</p></div>`;
+      <p>The tape is quiet. Alerts print here when a base completes, a pivot
+      breaks, or a name moves <em>+2% inside 15 minutes</em>.</p>
+      <p style="margin-top:10px">${closed
+        ? "NSE is closed right now, so nothing is moving — but you can screen your watchlist for VCP bases on today's daily bars any time."
+        : "Screening runs automatically every 30 minutes. Force a pass now if you don't want to wait."}</p>
+      <button class="act primary" data-action="scan">⟳ Screen now</button></div>`;
     return;
   }
   host.innerHTML = S.alerts.slice(0, 200)
@@ -786,14 +841,119 @@ function paintBadge() {
 }
 
 /* ──────────────────────────────────────────────────────────── actions */
-$("btn-scan").addEventListener("click", async (e) => {
-  e.target.disabled = true; e.target.textContent = "Scanning…";
-  try { await api("/api/scan", { method: "POST" }); }
-  finally { e.target.disabled = false; e.target.textContent = "Rescan now"; }
-});
-$("btn-clear").addEventListener("click", async () => {
+const STARTER = [
+  ["RELIANCE.NS", "Reliance Industries"], ["HDFCBANK.NS", "HDFC Bank"],
+  ["ICICIBANK.NS", "ICICI Bank"], ["INFY.NS", "Infosys"],
+  ["TCS.NS", "Tata Consultancy Services"], ["TATAMOTORS.NS", "Tata Motors"],
+  ["DIXON.NS", "Dixon Technologies"], ["TRENT.NS", "Trent"],
+  ["BEL.NS", "Bharat Electronics"], ["HAL.NS", "Hindustan Aeronautics"],
+  ["POLYCAB.NS", "Polycab India"], ["PERSISTENT.NS", "Persistent Systems"],
+];
+
+const note = (msg) => { const el = $("t-note"); if (el) el.textContent = msg; };
+
+/** Screening pulls a year of daily bars per symbol, so it is genuinely slow
+ *  the first time. Say so rather than leaving a dead button. */
+async function runScan(btn) {
+  const label = btn ? btn.textContent : null;
+  if (btn) { btn.disabled = true; btn.textContent = "⟳ Screening…"; }
+  note(`screening ${S.watch.length} symbol${S.watch.length === 1 ? "" : "s"}…`);
+  try {
+    const r = await api("/api/scan", { method: "POST" });
+    note(r.blocked
+      ? `screened ${r.scanned} · no data returned`
+      : `${r.fetched}/${r.scanned} fetched · ${r.valid_setups} valid setup${r.valid_setups === 1 ? "" : "s"}`);
+    await loadWatchlist();
+    autoSelect(); renderWatchlist(); renderDetail();
+    try { S.status = await api("/api/status"); renderStatus(); } catch {}
+  } catch (err) {
+    note("scan failed — check the service logs");
+    banner("<b>The screening request failed.</b> If the service was asleep it can take "
+      + "~50 seconds to wake on the free plan — try again.", false);
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = label; }
+  }
+}
+
+async function addStarter(btn) {
+  const label = btn ? btn.textContent : null;
+  if (btn) { btn.disabled = true; btn.textContent = "+ Adding…"; }
+  const have = new Set(S.watch.map((w) => w.symbol));
+  let added = 0;
+  for (const [symbol, name] of STARTER) {
+    if (have.has(symbol)) continue;
+    try { await api("/api/watchlist", { method: "POST", body: JSON.stringify({ symbol, name }) }); added++; }
+    catch (e) { /* keep going; one bad ticker should not stop the rest */ }
+  }
+  await loadWatchlist();
+  autoSelect(); renderWatchlist(); renderDetail();
+  note(added ? `added ${added} symbols — screening…` : "already on the list");
+  if (btn) { btn.disabled = false; btn.textContent = label; }
+  if (added) runScan(null);
+}
+
+function banner(html, good) {
+  const el = $("banner");
+  if (!html) { el.className = "banner"; el.innerHTML = ""; return; }
+  el.className = "banner on" + (good ? " good" : "");
+  el.innerHTML = `<span class="mark">${good ? "✓" : "!"}</span><span>${html}</span>`;
+}
+
+async function diagnose(btn) {
+  const label = btn ? btn.textContent : null;
+  if (btn) { btn.disabled = true; btn.textContent = "◈ Testing…"; }
+  note("probing the price feed…");
+  try {
+    const d = await api("/api/diagnostics");
+    note(d.ok ? `feed ok · ${d.latency_ms} ms` : "feed unavailable");
+    banner(
+      `<b>${d.ok ? "Price feed reachable." : "Price feed problem."}</b> ${esc(d.summary)}`
+      + (d.error ? `<br><span style="color:var(--muted)">${esc(d.error)}</span>` : ""),
+      d.ok
+    );
+  } catch (err) {
+    note("diagnostics failed");
+    banner("<b>Could not reach the server.</b> It may be waking from sleep — wait ~50s and retry.", false);
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = label; }
+  }
+}
+
+/** Turn the last screening pass into a plain-English verdict. */
+function renderHealth() {
+  const h = S.status && S.status.scanner && S.status.scanner.data_health;
+  if (!h) return;
+  if (h.blocked) {
+    banner(
+      `<b>No price data came back for any of your ${h.requested} symbols.</b> `
+      + "The scanner is running fine — the data provider is refusing this host. "
+      + "Yahoo rate-limits cloud IPs. Press <em>Test feed</em> for detail, retry in "
+      + "a few minutes, or move to a broker feed.", false);
+  } else if (h.fetched && h.fetched < h.requested) {
+    banner(`<b>${h.fetched} of ${h.requested} symbols returned data.</b> `
+      + `No bars for ${h.missing.map(esc).join(", ")} — usually a wrong ticker or a `
+      + "temporary provider hiccup.", false);
+  } else {
+    banner("");
+  }
+}
+
+async function clearTape() {
   await api("/api/alerts", { method: "DELETE" });
-  S.alerts = []; renderAlerts();
+  S.alerts = []; renderAlerts(); note("tape cleared");
+}
+
+const wire = (id, fn) => { const el = $(id); if (el) el.addEventListener("click", () => fn(el)); };
+wire("t-scan", runScan);
+wire("t-seed", addStarter);
+wire("t-diag", diagnose);
+wire("t-clear", clearTape);
+wire("btn-scan", runScan);
+wire("btn-clear", clearTape);
+document.addEventListener("click", (e) => {
+  const a = e.target.closest("[data-action]");
+  if (!a) return;
+  ({ scan: runScan, seed: addStarter })[a.dataset.action]?.(a);
 });
 
 /* ──────────────────────────────────────────────────────── live stream */
