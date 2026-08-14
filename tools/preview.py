@@ -118,6 +118,11 @@ async def status(_req):
                 "last_vcp_scan": (datetime.now(IST) - timedelta(minutes=12)).isoformat(),
                 "alerts_today": len(ALERTS),
                 "errors": [],
+                "data_health": {
+                    "requested": len(WATCH), "fetched": len(WATCH),
+                    "valid_setups": sum(1 for s in SETUPS.values() if s["valid"]),
+                    "missing": [], "at": datetime.now(IST).isoformat(), "blocked": False,
+                },
             },
             "feed": {
                 "name": "yahoo",
@@ -157,7 +162,18 @@ async def search(req):
 
 
 async def scan(_req):
-    return JSONResponse({"scanned": len(WATCH), "new_alerts": 0})
+    valid = sum(1 for s in SETUPS.values() if s["valid"])
+    return JSONResponse({"scanned": len(WATCH), "new_alerts": 0,
+                         "fetched": len(WATCH), "valid_setups": valid, "blocked": False})
+
+
+async def diagnostics(_req):
+    return JSONResponse({
+        "ok": True, "probe": "RELIANCE.NS", "bars": 335, "latency_ms": 412,
+        "last_close": 291.0, "last_bar_date": "2024-04-12", "error": "",
+        "summary": "Price feed is healthy — 335 daily bars for RELIANCE.NS, "
+                   "last close 291.00. Screening will work.",
+    })
 
 
 async def stream(_req):
@@ -200,6 +216,7 @@ app = Starlette(
         Route("/api/setups", setups),
         Route("/api/search", search),
         Route("/api/scan", scan, methods=["POST"]),
+        Route("/api/diagnostics", diagnostics),
         Route("/api/stream", stream),
     ]
 )
